@@ -37,11 +37,12 @@ class RedisSessionStore < ActionDispatch::Session::AbstractStore
     @default_options.merge!(redis_options)
     @redis = Redis.new(redis_options)
     @raise_errors = !!options[:raise_errors]
+    @serializer = options.fetch(:serializer, Marshal)
   end
 
   private
 
-  attr_reader :redis, :key, :default_options, :raise_errors
+  attr_reader :redis, :key, :default_options, :raise_errors, :serializer
 
   def prefixed(sid)
     "#{default_options[:key_prefix]}#{sid}"
@@ -51,7 +52,7 @@ class RedisSessionStore < ActionDispatch::Session::AbstractStore
     sid ||= generate_sid
     begin
       data = redis.get(prefixed(sid))
-      session = data.nil? ? {} : Marshal.load(data)
+      session = data.nil? ? {} : decode(data)
     rescue Errno::ECONNREFUSED => e
       raise e if raise_errors
       session = {}
@@ -59,17 +60,34 @@ class RedisSessionStore < ActionDispatch::Session::AbstractStore
     [sid, session]
   end
 
+  def decode(data)
+    serializer.load(data)
+  rescue => e
+    message = "RedisSessionStore#decode: #{serializer} #{e.class} #{e.message}"
+    Rails.logger.warn(message)
+    raise e if raise_errors
+    return {}
+  end
+
   def set_session(env, sid, session_data, options = nil)
     expiry = (options || env[ENV_SESSION_OPTIONS_KEY])[:expire_after]
     if expiry
-      redis.setex(prefixed(sid), expiry, Marshal.dump(session_data))
+      redis.setex(prefixed(sid), expiry, encode(session_data))
     else
-      redis.set(prefixed(sid), Marshal.dump(session_data))
+      redis.set(prefixed(sid), encode(session_data))
     end
     return sid
   rescue Errno::ECONNREFUSED => e
     raise e if raise_errors
     return false
+  end
+
+  def encode(session_data)
+    serializer.dump(session_data)
+  rescue => e
+    message = "RedisSessionStore#encode: #{serializer} #{e.class} #{e.message}"
+    Rails.logger.warn(message)
+    raise e
   end
 
   def destroy_session(env, sid, options)

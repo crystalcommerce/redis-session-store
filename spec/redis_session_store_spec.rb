@@ -239,4 +239,54 @@ describe RedisSessionStore do
       end
     end
   end
+
+  describe 'session encoding' do
+    let(:env)          { double('env') }
+    let(:session_id)   { 12_345 }
+    let(:session_data) { { 'some' => 'data' } }
+    let(:options)      { {} }
+    let(:encoded_data) { Marshal.dump(session_data) }
+    let(:redis)        { double('redis', set: nil, get: encoded_data) }
+
+    before do
+      store.stub(:redis).and_return(redis)
+    end
+
+    context 'default encoding' do
+      it 'encodes with the built-in Marshal format' do
+        redis.should_receive(:set).with('12345', Marshal.dump(session_data))
+        store.send(:set_session, env, session_id, session_data, options)
+      end
+
+      it 'decodes with the built-in Marshal format' do
+        expect(store.send(:get_session, env, session_id))
+          .to eq([session_id, session_data])
+      end
+    end
+
+    context 'configured encoder class' do
+      # A custom encoder. Just needs to respond to dump and load
+      class MyCustomEncoder
+        def self.dump(_)
+          'custom encoding!'
+        end
+
+        def self.load(_)
+          { 'custom' => 'loaded data' }
+        end
+      end
+
+      let(:options) { { serializer: MyCustomEncoder } }
+
+      it 'encodes with the custom encoder' do
+        redis.should_receive(:set).with('12345', 'custom encoding!')
+        store.send(:set_session, env, session_id, session_data, options)
+      end
+
+      it 'decodes with the custom encoder' do
+        expect(store.send(:get_session, env, session_id))
+          .to eq([session_id, { 'custom' => 'loaded data' }])
+      end
+    end
+  end
 end
